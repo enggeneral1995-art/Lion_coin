@@ -390,6 +390,80 @@ let boostActive = false, boostTimer = 0;
 let streak = 3;
 let currentTab = 'home';
 
+// ===== SAVE & LOAD =====
+function saveData() {
+  const data = {
+    coins, totalCoins, energy, maxEnergy,
+    clickPower, autoCoins, streak,
+    upgrades: UPGRADES.map(u => ({id: u.id, level: u.level})),
+    tasks: TASKS.map(t => ({id: t.id, done: t.done})),
+    lastSeen: Date.now()
+  };
+  try { localStorage.setItem('lioncoin_save', JSON.stringify(data)); } catch(e) {}
+}
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem('lioncoin_save');
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    coins = data.coins || 0;
+    totalCoins = data.totalCoins || 0;
+    maxEnergy = data.maxEnergy || 500;
+    clickPower = data.clickPower || 1;
+    autoCoins = data.autoCoins || 0;
+    streak = data.streak || 1;
+
+    // Offline earnings
+    if (data.lastSeen && autoCoins > 0) {
+      const secsPassed = Math.floor((Date.now() - data.lastSeen) / 1000);
+      const maxOffline = 3 * 60 * 60; // 3 hours max
+      const earned = Math.min(secsPassed, maxOffline) * (autoCoins / 3600);
+      coins += Math.floor(earned);
+      totalCoins += Math.floor(earned);
+    }
+
+    // Energy regen while offline
+    if (data.lastSeen) {
+      const secsPassed = Math.floor((Date.now() - data.lastSeen) / 1000);
+      energy = Math.min((data.energy || 0) + secsPassed * 3, maxEnergy);
+    } else {
+      energy = maxEnergy;
+    }
+
+    // Restore upgrades
+    if (data.upgrades) {
+      data.upgrades.forEach(saved => {
+        const u = UPGRADES.find(x => x.id === saved.id);
+        if (u) u.level = saved.level || 0;
+      });
+      // Recalculate from levels
+      clickPower = 1;
+      autoCoins = 0;
+      maxEnergy = 500;
+      UPGRADES.forEach(u => {
+        for (let i = 0; i < u.level; i++) {
+          if (u.type === 'click') clickPower += u.bonus;
+          if (u.type === 'auto') autoCoins += u.bonus;
+          if (u.type === 'maxEnergy') maxEnergy += u.bonus;
+        }
+      });
+      // Use saved values for coins/total
+      coins = data.coins || 0;
+      totalCoins = data.totalCoins || 0;
+    }
+
+    // Restore tasks
+    if (data.tasks) {
+      data.tasks.forEach(saved => {
+        const t = TASKS.find(x => x.id === saved.id);
+        if (t) t.done = saved.done || false;
+      });
+    }
+  } catch(e) {}
+}
+
+
 const RANKS = [
   {name:"🐾 Cub", min:0, next:"⚔️ Hunter", nextMin:1000},
   {name:"⚔️ Hunter", min:1000, next:"🏹 Alpha", nextMin:5000},
@@ -424,6 +498,21 @@ if (tg) {
   if (user) document.getElementById('user-name').textContent = user.first_name || 'Lion King';
 }
 
+// Load saved data
+loadData();
+
+// Auto-skip gate if already joined before
+if (localStorage.getItem('lioncoin_joined') === '1') {
+  document.getElementById('gate').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('app').style.flexDirection = 'column';
+  buildDailyModal();
+  setTimeout(() => { document.getElementById('daily-modal').style.display = 'flex'; }, 500);
+  buildUpgrades();
+  buildTasks();
+  updateUI();
+}
+
 // ===== GATE =====
 function openTelegram() {
   window.open("https://t.me/lion_coin", "_blank");
@@ -436,8 +525,10 @@ function backToStep1() {
 }
 function confirmJoin() {
   coins += 10000; totalCoins += 10000;
+  localStorage.setItem('lioncoin_joined', '1');
   document.getElementById('gate-step2').style.display = 'none';
   document.getElementById('gate-done').style.display = 'block';
+  saveData();
   setTimeout(startApp, 900);
 }
 function startApp() {
@@ -474,6 +565,7 @@ function claimDaily() {
   document.getElementById('daily-modal').style.display = 'none';
   document.getElementById('streak-display').textContent = streak;
   updateUI();
+  saveData();
 }
 
 // ===== UPGRADES =====
@@ -506,6 +598,7 @@ function buyUpgrade(id) {
   if (u.type === 'refill') energy = Math.min(energy + u.bonus, maxEnergy);
   buildUpgrades();
   updateUI();
+  saveData();
 }
 
 // ===== TASKS =====
@@ -529,7 +622,7 @@ function claimTask(id) {
   if (t.link) window.open(t.link, '_blank');
   t.done = true;
   coins += t.reward; totalCoins += t.reward;
-  buildTasks(); updateUI();
+  buildTasks(); updateUI(); saveData();
 }
 
 // ===== TAP =====
@@ -551,6 +644,7 @@ function handleTap(e) {
 
   coins += power; totalCoins += power;
   energy = Math.max(energy - 1, 0);
+  saveData();
 
   const btn = document.getElementById('lion-btn');
   btn.classList.add('tapped');
@@ -583,6 +677,9 @@ function inviteFriend() {
   if (tg) tg.openTelegramLink('https://t.me/share/url?url=https://t.me/LionCoinBot&text=Join Lion Coin and earn free coins!');
   else window.open('https://t.me/lion_coin', '_blank');
 }
+
+// ===== AUTO SAVE every 10s =====
+setInterval(saveData, 10000);
 
 // ===== AUTO COINS =====
 setInterval(() => {
